@@ -100,6 +100,13 @@ var _unknown: Dictionary = {}
 var _clamps: Dictionary = {}
 var _dirty := false
 var _dirty_since_ms := 0
+
+# Keys changed since this process loaded whose definition says a restart is needed.
+#
+# Not cleared by saving. Saving is what makes the value survive; the RUNNING process is
+# still showing the old one, which is the whole point of the flag -- and a list cleared on
+# save is a notice that disappears the moment the player presses Apply.
+var _restart_pending: Dictionary = {}
 var _loaded := false
 
 
@@ -195,6 +202,8 @@ func set_value(key: StringName, value: Variant, reason: StringName = &"user") ->
 	_values[key] = stored
 	_dirty = true
 	_dirty_since_ms = Time.get_ticks_msec()
+	if def.requires_restart:
+		_restart_pending[key] = true
 	changed.emit(key, get_value(key), reason)
 	return DotResult.success(stored)
 
@@ -223,6 +232,29 @@ func reset_all() -> void:
 
 func has_unsaved_changes() -> bool:
 	return _dirty
+
+
+## Whether anything changed this session only takes effect after a restart.
+##
+## [b]`DotSettingsDef.requires_restart` was declared, documented and read by nothing.[/b]
+## A game holds a manager, never a def, so "which of the things I just changed need a
+## restart" had no answer anywhere -- and the symptom is the one every options screen with
+## this bug has: a renderer setting that appears to apply and does not, with no notice.
+func needs_restart() -> bool:
+	return not _restart_pending.is_empty()
+
+
+## Which settings are waiting for a restart, sorted.
+##
+## Sorted because an options screen lists them to a player, and `Dictionary.keys()` is in
+## insertion order -- so the same two settings would be listed in a different order
+## depending on which one the player touched first.
+func restart_pending() -> PackedStringArray:
+	var out := PackedStringArray()
+	for k in _restart_pending.keys():
+		out.append(String(k))
+	out.sort()
+	return out
 
 
 # --- Loading and saving -----------------------------------------------------
@@ -257,6 +289,9 @@ func load_now() -> DotResult:
 	_unknown = coerced["unknown"]
 	_loaded = true
 	_dirty = false
+	# A load is what a restart looks like from here: the values in memory now ARE the ones
+	# on disk, so nothing is waiting any more.
+	_restart_pending.clear()
 
 	var corrected: PackedStringArray = coerced["corrected"]
 	if not corrected.is_empty():

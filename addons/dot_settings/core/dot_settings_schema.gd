@@ -166,6 +166,130 @@ func coerce_document(raw: Dictionary) -> Dictionary:
 	}
 
 
+## Builds a schema from an existing [DotConfig], by reflection.
+##
+## [b]This is the anti-duplication path and it is the one most existing code wants.[/b]
+## Several projects in this family already have a [DotConfig] full of player-facing
+## settings — a volume, a camera follow time, whether to show names — which dot-ui already
+## generates a panel from. Writing a schema beside one would be two copies of one list, and
+## this tree's most repeated bug is a list that went stale.
+##
+## So: the config keeps being the declaration, and this reads it. What the config cannot
+## say is the part a schema adds — which scope a key belongs to, and which ones a server
+## may clamp — so those arrive as [param scopes], keyed by name, defaulting to
+## [constant DotSettingsDef.Scope.DEVICE].
+##
+## [codeblock]
+## var schema := DotSettingsSchema.from_config(my_config, {
+##     &"sensitivity": DotSettingsDef.Scope.ACCOUNT,
+##     &"field_of_view": DotSettingsDef.Scope.SERVER_CLAMPED,
+## })
+## [/codeblock]
+##
+## Ranges and enum options come from the property hints, so an `@export_range` is a slider
+## with the right bounds and an `@export_enum` is a list with the right options — which
+## means a setting whose range is tightened in the config is tightened everywhere at once.
+static func from_config(
+	config: DotConfig, scopes: Dictionary = {}, categories: Dictionary = {}
+) -> DotSettingsSchema:
+	var schema := DotSettingsSchema.new()
+	if config == null:
+		return schema
+
+	for prop in config.get_property_list():
+		var name := StringName(str(prop.get("name", "")))
+		if not config.has_key(String(name)):
+			continue
+
+		var def := DotSettingsDef.new()
+		def.key = name
+		def.default_value = config.get(name)
+		def.scope = scopes.get(name, DotSettingsDef.Scope.DEVICE)
+		def.category = categories.get(name, &"general")
+
+		var hint := int(prop.get("hint", PROPERTY_HINT_NONE))
+		var hint_string := str(prop.get("hint_string", ""))
+
+		match int(prop.get("type", TYPE_NIL)):
+			TYPE_BOOL:
+				def.kind = DotSettingsDef.Kind.BOOL
+			TYPE_INT:
+				if hint == PROPERTY_HINT_ENUM:
+					# An @export_enum on an int is an index into a list of names. It is
+					# stored here as the NAME rather than the index, because an index is a
+					# number whose meaning changes the day somebody inserts an option --
+					# and every saved document then means something different with nothing
+					# saying so.
+					def.kind = DotSettingsDef.Kind.ENUM
+					var options: Array[StringName] = []
+					for part in hint_string.split(","):
+						options.append(StringName(part.split(":")[0]))
+					def.options = options
+					var index := int(config.get(name))
+					def.default_value = (
+						options[index] if index >= 0 and index < options.size()
+						else (options[0] if not options.is_empty() else &"")
+					)
+				else:
+					def.kind = DotSettingsDef.Kind.INT
+					_apply_range(def, hint, hint_string)
+			TYPE_FLOAT:
+				def.kind = DotSettingsDef.Kind.FLOAT
+				_apply_range(def, hint, hint_string)
+			_:
+				def.kind = DotSettingsDef.Kind.STRING
+				def.default_value = str(config.get(name))
+
+		# Whatever the config refuses from the environment and argv is private here too.
+		# Two answers to one question is how a secret ends up in one of them.
+		if config.sensitive_keys().has(String(name)):
+			def.private = true
+
+		schema.add(def)
+
+	return schema
+
+
+static func _apply_range(def: DotSettingsDef, hint: int, hint_string: String) -> void:
+	if hint != PROPERTY_HINT_RANGE:
+		# No declared range. Left at the resource's defaults rather than invented: a
+		# made-up maximum is a slider that silently refuses a value the config accepts.
+		def.min_value = 0.0
+		def.max_value = 0.0
+		return
+	var parts := hint_string.split(",")
+	if parts.size() >= 2:
+		def.min_value = parts[0].to_float()
+		def.max_value = parts[1].to_float()
+	if parts.size() >= 3 and parts[2].is_valid_float():
+		def.step = parts[2].to_float()
+
+
+## Writes this schema's values back into the [DotConfig] they came from.
+##
+## The other half of [method from_config], and the reason both exist: the config is what
+## the game already reads, so a settings document that does not reach it is a document
+## nothing consumes — which is this family's single most repeated bug.
+func apply_to_config(config: DotConfig, values: Dictionary) -> PackedStringArray:
+	var written := PackedStringArray()
+	if config == null:
+		return written
+	for d in defs:
+		if not values.has(d.key) or not config.has_key(String(d.key)):
+			continue
+		var value: Variant = values[d.key]
+		if d.kind == DotSettingsDef.Kind.ENUM:
+			# Back to the index the config wants, from the name the document stores.
+			var index := d.options.find(StringName(str(value)))
+			if index < 0:
+				continue
+			value = index
+		if DotValue.differs(config.get(d.key), value):
+			config.set(d.key, value)
+			written.append(String(d.key))
+	return written
+
+
 ## A [DotConfig] carrying this schema's current values.
 ##
 ## [b]This is the whole of "integrates with dot-ui".[/b] dot-ui's settings panel is

@@ -16,8 +16,8 @@ extends Node
 ## in one section took eight checks out of a run that reported "0 failed" and exited 0.
 ## The section counter did not fire, because the section had already announced itself.
 ## A total does fire, and it is one line.
-const SECTIONS := 8
-const CHECKS := 71
+const SECTIONS := 9
+const CHECKS := 97
 
 var _passed := 0
 var _failed := 0
@@ -41,6 +41,7 @@ func _run() -> void:
 	_test_migration()
 	_test_clamps()
 	_test_config_bridge()
+	_test_from_an_existing_config()
 
 	_line("")
 	_line("%d sections, %d passed, %d failed" % [_section_count, _passed, _failed])
@@ -76,7 +77,7 @@ func _schema() -> DotSettingsSchema:
 	))
 	s.add(DotSettingsDef.choice(
 		&"quality", &"high", [&"low", &"medium", &"high"] as Array[StringName], &"video"
-	))
+	).with_description("How much the renderer is asked to do").needing_restart())
 	s.add(DotSettingsDef.text(&"audio_device", "", &"audio").as_private())
 	return s
 
@@ -225,6 +226,32 @@ func _test_manager() -> void:
 	_check(seen.back()[2] == &"reset", "with its own reason")
 
 	_check(m.describe_lines().size() > 4, "and it describes itself")
+
+	# `DotSettingsDef.requires_restart` was declared, documented and read by nothing: a
+	# game holds a manager and never a def, so nothing could answer "does what I just
+	# changed take effect now". The detector that finds this is not the once-only grep --
+	# the name occurred three times -- but the one beside it: a public surface on the inner
+	# object with no forwarder on the one anybody holds.
+	_check(m.schema.find(&"quality").requires_restart, "a setting can say it needs a restart")
+	_check(
+		m.schema.find(&"quality").description != "",
+		"and carry a description for the screen that draws it"
+	)
+	_check(not m.needs_restart(), "nothing is waiting on a restart to begin with")
+	m.set_value(&"master_volume", 0.5)
+	_check(
+		not m.needs_restart(),
+		"and a setting that takes effect immediately does not put anything there"
+	)
+	m.set_value(&"quality", &"low")
+	_check(m.needs_restart(), "while one that does not, does")
+	_check(
+		Array(m.restart_pending()) == ["quality"],
+		"naming which, because 'some settings need a restart' is not a thing a player can act on"
+	)
+
+	_check(m.has_unsaved_changes(), "the manager knows it has something to write")
+
 	m.queue_free()
 
 
@@ -411,6 +438,52 @@ func _test_clamps() -> void:
 		"and a client that refuses clamps refuses them"
 	)
 
+	# THE CATEGORIES REACH THE GENERATED SCREEN, which they did not.
+	#
+	# `DotSettingsDef.category` has carried "Video", "Audio", "Gameplay" since the class was
+	# written, and `_get_property_list` emitted no `PROPERTY_USAGE_GROUP` entry at all -- so
+	# every setting landed under one heading, and a generated screen came out with a single
+	# section called "Resource", the base class name. The panel drew perfectly and the
+	# heading was a plausible word, which is why nobody saw it until one was rendered.
+	var grouped := m.to_config()
+	var headings := PackedStringArray()
+
+	for property in grouped.get_property_list():
+		if int(property["usage"]) & PROPERTY_USAGE_GROUP != 0:
+			headings.append(str(property["name"]))
+
+	_check(
+		Array(headings).has("Audio") and Array(headings).has("Video"),
+		"a generated config carries its categories as groups (%s)" % [headings]
+	)
+	# AFTER the built-in ones, which is what makes them win.
+	#
+	# `get_property_list()` includes the base class's own groups -- `Resource` is one -- and
+	# a reader tracks the MOST RECENT group entry it has passed. So "Audio" must come after
+	# "Resource" in the list or every setting is filed under the class name, which is
+	# exactly what a rendered screen showed before these entries existed at all.
+	var resource_at := Array(headings).find("Resource")
+	var audio_at := Array(headings).find("Audio")
+	_check(
+		audio_at > resource_at,
+		"and after the base class's own, so a reader tracking the last one sees ours (%s)"
+			% [headings]
+	)
+
+	# `clamp_bound` sits beside `is_clamped` and had no caller. It is the half a screen
+	# needs: "capped" with no number is a slider a player cannot reason about.
+	#
+	# The clamps were released a few lines above, so they are put back deliberately rather
+	# than assumed -- a check that reads state the section already tore down is a check
+	# that reports the teardown as the bug.
+	m.apply_server_clamps({"fov": 90})
+	_check(m.is_clamped(&"fov"), "a clamped setting says it is clamped")
+	_check(int(m.clamp_bound(&"fov")) == 90, "and says what the bound is, which is the half a screen draws")
+	_check(
+		m.clamp_bound(&"master_volume") == null,
+		"while an unclamped one has no bound rather than a zero, which would read as a cap of zero"
+	)
+
 	m.queue_free()
 	strict.queue_free()
 
@@ -456,6 +529,86 @@ func _test_config_bridge() -> void:
 	_check(m.get_string(&"quality") == "low", "for every kind, including an enum")
 
 	m.queue_free()
+
+
+# --- 9 ----------------------------------------------------------------------
+
+func _test_from_an_existing_config() -> void:
+	_section("A schema read out of a config that already existed")
+
+	var cfg := ExampleGameConfig.new()
+	var schema := DotSettingsSchema.from_config(cfg, {
+		&"sensitivity": DotSettingsDef.Scope.ACCOUNT,
+		&"field_of_view": DotSettingsDef.Scope.SERVER_CLAMPED,
+	})
+
+	_check(schema.validate().ok, "the derived schema validates")
+	_check(schema.keys().size() == 5, "with one entry per config key (%d)" % schema.keys().size())
+
+	var vol := schema.find(&"volume")
+	_check(vol != null and vol.kind == DotSettingsDef.Kind.FLOAT, "a float stays a float")
+	_check(
+		is_equal_approx(vol.min_value, 0.0) and is_equal_approx(vol.max_value, 1.0),
+		"and takes its bounds from the @export_range, so tightening the config tightens "
+		+ "the slider and the console at once"
+	)
+
+	var quality := schema.find(&"quality")
+	_check(quality != null and quality.kind == DotSettingsDef.Kind.ENUM, "an @export_enum is an enum")
+	_check(quality.options.size() == 3, "with its options")
+	_check(
+		String(quality.default_value) == "medium",
+		"defaulting to the NAME the index pointed at, because an index means something "
+		+ "different the day somebody inserts an option"
+	)
+
+	_check(
+		schema.find(&"sensitivity").scope == DotSettingsDef.Scope.ACCOUNT,
+		"scopes are the one thing a config cannot say, so they are passed in"
+	)
+	_check(
+		schema.find(&"field_of_view").scope == DotSettingsDef.Scope.SERVER_CLAMPED,
+		"including the one a server may cap"
+	)
+	_check(
+		schema.find(&"secret_path").private,
+		"and whatever the config refuses from the environment is private here too"
+	)
+
+	# The half that matters: the config is what the game already reads, so a document
+	# that does not reach it is a document nothing consumes.
+	var values := schema.defaults()
+	values[&"volume"] = 0.3
+	values[&"quality"] = &"high"
+	var written := schema.apply_to_config(cfg, values)
+	_check(written.size() == 2, "writing back reports what it changed")
+	_check(is_equal_approx(cfg.volume, 0.3), "and the config has the new value")
+	_check(cfg.quality == 2, "with an enum converted back to the index the config wants")
+
+	var again := schema.apply_to_config(cfg, values)
+	_check(again.is_empty(), "and writing the same values again changes nothing")
+
+	_done_nothing()
+
+
+class ExampleGameConfig:
+	extends DotConfig
+
+	## A stand-in for the kind of DotConfig several games in this family already have:
+	## player-facing settings that dot-ui already generates a panel from.
+
+	@export_range(0.0, 1.0, 0.01) var volume: float = 0.8
+	@export_range(0.05, 20.0, 0.05) var sensitivity: float = 2.5
+	@export_range(70, 120, 1) var field_of_view: int = 100
+	@export_enum("low", "medium", "high") var quality: int = 1
+	@export var secret_path: String = ""
+
+	func sensitive_keys() -> PackedStringArray:
+		return PackedStringArray(["secret_path"])
+
+
+func _done_nothing() -> void:
+	pass
 
 
 # --- Harness ---------------------------------------------------------------

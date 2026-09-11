@@ -27,6 +27,16 @@ Two things came out of that:
 
 The related one, smaller: a value that changed only its Variant type is **not** a correction worth telling a player about. `fov: 110 -> 110` is noise, and noise is what stops the real lines being read. The comparison there is on what they print, which is exactly the question being asked.
 
+## `from_config`, which is the path most existing code wants
+
+Several projects in this family already have a `DotConfig` full of player-facing settings — a volume, a camera follow time, whether to show names — and dot-ui already generates a panel from one. Writing a schema beside such a config would be **two copies of one list**, which is this tree's most repeated bug.
+
+`DotSettingsSchema.from_config(cfg, scopes)` reads it instead. Ranges come from `@export_range`, options from `@export_enum`, and anything in `sensitive_keys()` becomes `private`. What a config genuinely cannot say is the scope — which keys follow a person and which a server may clamp — so that arrives as a dictionary and nothing else is repeated.
+
+`apply_to_config` is the way back, and both exist for one reason: **the config is what the game already reads.** A settings document that does not reach it is a document nothing consumes, which is the family's single most repeated bug.
+
+An `@export_enum` int is stored as the option **name**, not the index. An index means something different the day somebody inserts an option, and every saved document then quietly points at the wrong thing.
+
 ## The three scopes
 
 `DEVICE` never synchronises — a synchronised resolution breaks itself every time a player switches machines. `ACCOUNT` lives under `shared_namespace`, as a **second document rather than a merged one**, so two games opting into one name share a sensitivity and a game that does not opt in is unaffected by either. `SERVER_CLAMPED` is the small set a server may cap.
@@ -87,6 +97,14 @@ Its two branches genuinely return different types, and declaring it `int` silent
 - **Key binding storage beyond a string.** `Kind.BINDING` holds text and is opaque here. dot-ui has the rebinder and the conflict detection; this stores what it produces.
 - **Cloud conflict resolution.** Two machines that both changed the same account setting while offline is a real problem and a bigger one than this; last-write-wins is what the shipped store does and the addon says so rather than pretending.
 
+## The categories reached nothing until a screen was rendered
+
+`DotSettingsDef.category` has carried "Video", "Audio", "Gameplay" since the class was written, every schema in this family sets it, and `DotSettingsConfig._get_property_list` emitted **no `PROPERTY_USAGE_GROUP` entry at all**. That constant is what `@export_group` compiles to and the only thing a reflective reader has to group by — so a generated settings screen came out with a single heading called **"Resource"**, the base class name, over the volume, the chat lines and the shake scale together.
+
+It survived because everything about it looked right: the panel drew, every row was correct, and the heading was a plausible word. `game-simple-lobby/tools/screenshot_menus.sh` is what showed it.
+
+**The group entries have to come after the base class's own.** `get_property_list()` includes `Resource`'s groups, and a reader tracks the most recent entry it has passed — so a group emitted before them would be overwritten by the class name again. The suite asserts the order rather than the absence, because the built-in one is legitimately there.
+
 ## Validating
 
 ```bash
@@ -97,4 +115,4 @@ done
 timeout 120 godot --headless --path . res://examples/settings_selftest.tscn
 ```
 
-8 sections, 71 checks. **Read the stderr even when it exits 0** — this is the addon that proved why.
+9 sections, 97 checks. **Read the stderr even when it exits 0** — this is the addon that proved why.

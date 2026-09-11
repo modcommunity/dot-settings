@@ -78,8 +78,33 @@ func _get_property_list() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	if _schema == null:
 		return out
+
+	# A GROUP ENTRY WHENEVER THE CATEGORY CHANGES, which this did not emit at all.
+	#
+	# `PROPERTY_USAGE_GROUP` is what `@export_group` compiles to and is the only thing a
+	# reflective reader has to group by -- `DotSettingsPanel` walks the property list
+	# looking for exactly it. Without one, every setting landed under whatever heading the
+	# panel falls back to, and a generated screen came out with one section called
+	# **"Resource"**: the base class name, over the volume, the field of view and the chat
+	# lines together.
+	#
+	# `DotSettingsDef.category` has carried "Video", "Audio", "Gameplay" since the class was
+	# written, and every schema in this family sets it. It reached nothing. Nobody could see
+	# it because the panel drew perfectly and the heading was a plausible word.
+	var current := &""
+
 	for d in _schema.defs:
+		if d.category != current:
+			current = d.category
+			out.append({
+				"name": String(current).capitalize(),
+				"type": TYPE_NIL,
+				"usage": PROPERTY_USAGE_GROUP,
+				"hint_string": "",
+			})
+
 		out.append(_property_for(d))
+
 	return out
 
 
