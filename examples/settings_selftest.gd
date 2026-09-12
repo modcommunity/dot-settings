@@ -17,7 +17,7 @@ extends Node
 ## The section counter did not fire, because the section had already announced itself.
 ## A total does fire, and it is one line.
 const SECTIONS := 9
-const CHECKS := 97
+const CHECKS := 102
 
 var _passed := 0
 var _failed := 0
@@ -109,6 +109,21 @@ func _test_defs() -> void:
 
 	var bad_key := DotSettingsDef.boolean(&"not a key", true)
 	_check(not bad_key.validate().ok, "and so does a key that cannot be a filename")
+
+	var bind := DotSettingsDef.binding(&"chat_open", "Y")
+	_check(bind.validate().ok, "a binding is a setting like any other")
+	_check(bind.kind == DotSettingsDef.Kind.BINDING, "declared as a binding, not as text")
+	_check(str(bind.coerce("Shift+A").value) == "Shift+A", "and its text is carried through")
+	_check(
+		bind.category == &"controls",
+		"under controls by default, because that is the screen it belongs on"
+	)
+	# Opaque here on purpose: dot-settings does not depend on dot-ui and has no opinion
+	# about what a key is called. What it guarantees is that the value is bounded.
+	_check(
+		str(bind.coerce("x".repeat(200)).value).length() == bind.max_length,
+		"a binding is bounded like every other string in a document"
+	)
 
 	var b := DotSettingsDef.boolean(&"b", false)
 	_check(bool(b.coerce("on").value), "'on' is true")

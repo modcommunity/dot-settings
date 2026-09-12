@@ -280,6 +280,29 @@ static func text(
 	return d
 
 
+## An input binding, stored as the text form [DotInputBinding] reads and writes.
+##
+## [b]Text rather than a keycode.[/b] A settings document is written to disk, may be
+## synchronised to an account and is edited by hand more than any other file in a game.
+## [code]"Y"[/code] survives all three; [code]89[/code] survives none of them, and is also
+## a number that means a different key on a different layout.
+##
+## This addon never interprets it. dot-settings does not depend on dot-ui and has no
+## opinion about input; what it guarantees is the same thing it guarantees for any string —
+## that it is declared, bounded, scoped and enumerable.
+static func binding(
+	p_key: StringName, p_default: String, p_category: StringName = &"controls"
+) -> DotSettingsDef:
+	var d := DotSettingsDef.new()
+	d.key = p_key
+	d.kind = Kind.BINDING
+	d.default_value = p_default
+	d.category = p_category
+	# Long enough for "Shift+Kp Subtract" and nothing like long enough to be a payload.
+	d.max_length = 32
+	return d
+
+
 ## Returns self, so the constructors chain.
 func with_scope(p_scope: Scope) -> DotSettingsDef:
 	scope = p_scope

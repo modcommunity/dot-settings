@@ -90,6 +90,14 @@ Its two branches genuinely return different types, and declaring it `int` silent
 
 `namespace` is a reserved word in GDScript, and the error it produces is *"Expected parameter name"* — which points at the punctuation rather than at the word.
 
+## `BINDING` had a kind and no way to declare one
+
+`DotSettingsDef.Kind.BINDING` has existed since this addon was written and there was no constructor for it, so nothing in the family had ever declared a binding as a setting: every game's keys lived in `DotBindingsPanel`'s own file, and a game that wanted *one* key in its settings document had to build the def by hand. `DotSettingsDef.binding(key, default, category)` is that constructor, bounded at 32 characters — long enough for `"Shift+Kp Subtract"` and nothing like long enough to be a payload.
+
+**The value stays opaque here, and that is the seam.** dot-settings does not depend on dot-ui and has no opinion about what a key is called; `DotInputBinding` is what reads and writes the text. What this addon guarantees is what it guarantees for any string — that the setting is declared, bounded, scoped and enumerable, which is the whole difference between a settings system and a dictionary of whatever somebody happened to store.
+
+Text rather than a keycode because a settings document is written to disk, may be synchronised to an account, and is hand-edited more often than any other file in a game. `"Y"` survives all three; `89` survives none of them, and is also a number that means a different key on a different layout.
+
 ## Things deliberately not here
 
 - **An account store.** It is an HTTP client against somebody's backbone and whose backbone it is, is not this addon's decision. `remote_store` takes any subclass.
@@ -115,4 +123,4 @@ done
 timeout 120 godot --headless --path . res://examples/settings_selftest.tscn
 ```
 
-9 sections, 97 checks. **Read the stderr even when it exits 0** — this is the addon that proved why.
+9 sections, 102 checks. **Read the stderr even when it exits 0** — this is the addon that proved why.

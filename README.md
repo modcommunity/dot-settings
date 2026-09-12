@@ -17,7 +17,11 @@ The alternative, a dictionary of whatever somebody happened to store, is what ma
 schema.add(DotSettingsDef.number(&"master_volume", 0.8, 0.0, 1.0, &"audio"))
 schema.add(DotSettingsDef.integer(&"fov", 90, 70, 120, &"video")
     .with_scope(DotSettingsDef.Scope.SERVER_CLAMPED))
+schema.add(DotSettingsDef.binding(&"chat_open_key", "Y", &"chat")
+    .with_scope(DotSettingsDef.Scope.ACCOUNT))
 ```
+
+A binding is stored as the short text a person can read in a JSON file and type by hand — `"Y"`, `"Shift+A"`, `"Mouse 1"` — rather than as a keycode, which is a number that means a different key on a different keyboard layout. The value is opaque here: dot-ui's `DotInputBinding` is what turns it into an `InputEvent` and back.
 
 A screen enumerates the schema, a console completes against it, a store validates against it and a migration rewrites against it, so a new setting appears in all four without anybody editing four files.
 
