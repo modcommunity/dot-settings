@@ -109,7 +109,7 @@ Text rather than a keycode because a settings document is written to disk, may b
 
 `DotSettingsDef.category` has carried "Video", "Audio", "Gameplay" since the class was written, every schema in this family sets it, and `DotSettingsConfig._get_property_list` emitted **no `PROPERTY_USAGE_GROUP` entry at all**. That constant is what `@export_group` compiles to and the only thing a reflective reader has to group by — so a generated settings screen came out with a single heading called **"Resource"**, the base class name, over the volume, the chat lines and the shake scale together.
 
-It survived because everything about it looked right: the panel drew, every row was correct, and the heading was a plausible word. `game-simple-lobby/tools/screenshot_menus.sh` is what showed it.
+It survived because everything about it looked right: the panel drew, every row was correct, and the heading was a plausible word. A screenshot of the menus is what showed it.
 
 **The group entries have to come after the base class's own.** `get_property_list()` includes `Resource`'s groups, and a reader tracks the most recent entry it has passed — so a group emitted before them would be overwritten by the class name again. The suite asserts the order rather than the absence, because the built-in one is legitimately there.
 
