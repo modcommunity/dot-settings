@@ -1,126 +1,50 @@
 # dot-settings
 
-Settings as a bounded document, with three scopes and a server that may clamp but never read.
+A player's settings as a bounded document, with three scopes (device, account, server-clamped) and a server that may clamp but never read. `DotSettingsConfig` turns a schema into a `DotConfig`, so dot-ui draws the screen.
 
-**The distributable is `addons/dot_settings/`.** It requires [dot-core](../dot-core), a separate repository, and nothing else.
+Read the family [CLAUDE.md](../../CLAUDE.md) first; this file is only what is specific to settings.
 
-```bash
-ln -s ../../dot-core/addons/dot_core addons/dot_core
-```
+**The distributable is `addons/dot_settings/`.** It requires [dot-core](../dot-core) and nothing else (`ln -s ../../dot-core/addons/dot_core addons/dot_core`, gitignored). It names nothing from dot-ui; dot-menu builds on it.
 
-## Why this exists
+## Read before
 
-Every game in this family has a `DotConfig` and none of them has anywhere to put a *player's* settings. A `DotConfig` is a deployment's configuration: layered from defaults, a file, the environment and argv, loaded at boot and not written back. A volume slider is none of those things — it changes at runtime, it belongs to a person rather than to a process, and it has to survive a crash.
-
-`DotSettingsConfig` is the bridge and it is the interesting part of the addon: a `DotConfig` whose properties are a schema's keys, built at runtime. dot-ui generates a settings panel from any `DotConfig` by reflection, so handing one over means **a new setting appears on a screen with nobody editing a screen** — and this addon still does not know a `Control` exists.
-
-The mechanism matters, because the obvious spelling does not work: **Godot refuses a dynamic property on an `Object`**. Assigning `cfg.some_new_key = 1` pushes an error and sets nothing, which this family shipped once — a game descriptor whose `module` was assigned that way named no module at all, and the failure was a scene with nothing behind it. `_get_property_list` / `_get` / `_set` is the supported way, and the properties are then real to every reflective caller, including `DotConfig`'s own `config_keys()`.
-
-## What building it found, and it is the most important entry here
-
-**`!=` between two mismatched Variant types is a runtime ERROR in GDScript, not `true`.** `coerce_document` compared a coerced int with the String it came from, the expression was abandoned, and the section aborted — **while the suite reported "8 sections, 63 passed, 0 failed" and exited 0.**
-
-Two things came out of that:
-
-1. **`DotValue` is now in dot-core**, with a self-test. dot-npc-ai's blackboard had this exact bug (`get_value(...) != MISSING` answered false for every value that was not a `StringName`), so it is the second time, and the class is the family's answer. Use it anywhere either side is a `Variant` whose type you do not control.
-2. **Every suite here now asserts a CHECKS total, not just a section count.** The section counter cannot catch this: the section had already announced itself before it aborted. A total can, and it is one line. dot-console, dot-audio, dot-fx, dot-procedural-generation, dot-inventory, dot-peer-to-peer and dot-randomness all gained one.
-
-The related one, smaller: a value that changed only its Variant type is **not** a correction worth telling a player about. `fov: 110 -> 110` is noise, and noise is what stops the real lines being read. The comparison there is on what they print, which is exactly the question being asked.
-
-## `from_config`, which is the path most existing code wants
-
-Several projects in this family already have a `DotConfig` full of player-facing settings — a volume, a camera follow time, whether to show names — and dot-ui already generates a panel from one. Writing a schema beside such a config would be **two copies of one list**, which is this tree's most repeated bug.
-
-`DotSettingsSchema.from_config(cfg, scopes)` reads it instead. Ranges come from `@export_range`, options from `@export_enum`, and anything in `sensitive_keys()` becomes `private`. What a config genuinely cannot say is the scope — which keys follow a person and which a server may clamp — so that arrives as a dictionary and nothing else is repeated.
-
-`apply_to_config` is the way back, and both exist for one reason: **the config is what the game already reads.** A settings document that does not reach it is a document nothing consumes, which is the family's single most repeated bug.
-
-An `@export_enum` int is stored as the option **name**, not the index. An index means something different the day somebody inserts an option, and every saved document then quietly points at the wrong thing.
-
-## The three scopes
-
-`DEVICE` never synchronises — a synchronised resolution breaks itself every time a player switches machines. `ACCOUNT` lives under `shared_namespace`, as a **second document rather than a merged one**, so two games opting into one name share a sensitivity and a game that does not opt in is unaffected by either. `SERVER_CLAMPED` is the small set a server may cap.
-
-The account half is read **after** the local half on load, so it wins for the keys it owns. Reading it first would let a stale local copy overwrite the shared one, which is the direction that loses the change a player just made on another machine.
-
-## A server may clamp and may never read
-
-There is no read direction in this addon. Capping field of view is a legitimate competitive rule; asking a client for its bindings, its audio device or its resolution is a fingerprint that survives a new account and every ban a moderator issues. `apply_server_clamps` returns which keys it accepted and sends nothing back.
-
-**A clamp is a bound, not a value.** `get_value` is capped, `chosen_value` is the player's own, and `to_document` writes the choice. Every game that gets this wrong gets it wrong in the same direction, and the symptom is a setting that resets itself on every join.
-
-`clamps_persist` defaults to false, and that is not a preference: a persisting clamp is a server permanently editing the settings of somebody who has left, with no way for them to tell which of their values came from a server they played on once.
-
-## Unknown keys are kept
-
-The downgrade path. A player who runs a newer build, changes a setting it added and goes back would otherwise lose it silently, and lose it again every time. They survive a `reset_all` too, because they belong to a build this one does not know about and throwing them away is destroying somebody else's settings on their behalf.
-
-## The pieces
-
-| | |
+| Read | Before |
 | --- | --- |
-| `DotSettingsDef` | One setting: kind, scope, bounds, and the coercion. |
-| `DotSettingsSchema` | All of them, a version, and the migrations. The only list. |
-| `DotSettingsConfig` | A `DotConfig` built from a schema at runtime. The dot-ui bridge. |
-| `DotSettingsPolicy` | What a server may touch. A `DotConfig` itself. |
-| `DotSettingsStore` | Three methods. A missing document is a success, not a failure. |
-| `DotSettingsStoreFile` | Atomic JSON under `user://`, flushed for the web. |
-| `DotSettingsStoreMemory` | A suite's, and the honest fallback for a refused storage quota. |
-| `DotSettingsManager` | The node a game holds. |
+| [docs/design.md](docs/design.md) | anything: the config bridge, `from_config`, scopes, clamps, unknown keys, coercion, storage, bindings, what is not here |
+| [docs/history.md](docs/history.md) | the comparison that aborted a green suite, and the "Resource" heading |
 
-## Decisions
+## Layout
 
-### A missing document is a success
+| Path | What |
+| --- | --- |
+| `core/dot_settings_def.gd` | `DotSettingsDef`: one setting; kind, scope, bounds, coercion; `binding()` |
+| `core/dot_settings_schema.gd` | `DotSettingsSchema`: all of them, a version, the migrations. The only list. `from_config`, `apply_to_config` |
+| `core/dot_settings_config.gd` | `DotSettingsConfig`: a `DotConfig` built from a schema at runtime; the dot-ui bridge |
+| `core/dot_settings_policy.gd` | `DotSettingsPolicy`: what a server may touch; a `DotConfig` |
+| `store/dot_settings_store.gd` | `DotSettingsStore`: three methods; a missing document is a success |
+| `store/dot_settings_store_file.gd` | `DotSettingsStoreFile`: atomic JSON under `user://`, flushed for the web |
+| `store/dot_settings_store_memory.gd` | `DotSettingsStoreMemory`: a suite's, and the fallback for a refused quota |
+| `runtime/dot_settings_manager.gd` | `DotSettingsManager`: the node a game holds |
+| `examples/settings_selftest.tscn` | the suite |
 
-"Nobody has ever saved settings here" is the first run of every installation. A store that reports it as an error makes every caller write the same two-line special case, and that is the case somebody gets wrong — and then a first run is a crash.
+Paths except `examples/` are in `addons/dot_settings/`.
 
-### Coercion corrects, and refuses only what is not the setting
+## Running and testing
 
-A settings file is edited by hand more often than any other file in a game. Refusing the whole document because one slider is out of range is a player who lost every other setting they had. The exception is an enum: an unknown option is refused outright, because silently substituting the default means a renamed option puts everybody back to "low" with nothing said.
+The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything)), then `timeout 120 godot --headless --path . res://examples/settings_selftest.tscn`. **Read the stderr even when it exits 0**: this is the addon that proved why ([history](docs/history.md#a-comparison-that-aborted-a-green-suite)).
 
-### `_clamp_number` returns a `Variant`
+## Rules that bite
 
-Its two branches genuinely return different types, and declaring it `int` silently truncates every float setting in the schema — a volume slider that can only be 0 or 1, with every property about it reading correctly.
+- Runtime properties go through `_get_property_list` / `_get` / `_set`; a dynamic assignment on an `Object` sets nothing. [design](docs/design.md#dotsettingsconfig-a-dotconfig-built-from-a-schema)
+- Category groups are emitted after the base class's own groups. [design](docs/design.md#dotsettingsconfig-a-dotconfig-built-from-a-schema)
+- A game with a `DotConfig` of player settings uses `from_config` / `apply_to_config`, never a second list. [design](docs/design.md#from_config-the-path-most-existing-code-wants)
+- Enums are stored by option name, never index. [design](docs/design.md#from_config-the-path-most-existing-code-wants)
+- `DEVICE` never syncs; `ACCOUNT` is a second document under `shared_namespace`, read after the local one. [design](docs/design.md#the-three-scopes)
+- A server clamps and never reads; a clamp bounds `get_value` and never touches `chosen_value` or the saved document; `clamps_persist` stays false by default. [design](docs/design.md#a-server-may-clamp-and-may-never-read)
+- Unknown keys are kept, through `reset_all` too. [design](docs/design.md#unknown-keys-are-kept)
+- Coercion corrects; only an unknown enum option is refused. `_clamp_number` returns `Variant`. [design](docs/design.md#coercion)
+- Compare Variants whose types you do not control with dot-core's `DotValue`, never `!=`. [design](docs/design.md#coercion)
+- A missing document is a success; a corrupt one is renamed `.broken`. Use `app_namespace`, never `namespace`. [design](docs/design.md#storage)
+- A binding is opaque text, at most 32 characters, declared with `DotSettingsDef.binding()`. [design](docs/design.md#bindings-are-opaque-text)
 
-### A corrupt file is renamed, not deleted
-
-`.broken` beside it. The one thing worse than losing a settings file is losing it and being unable to show anybody what was in it.
-
-### `app_namespace`, not `namespace`
-
-`namespace` is a reserved word in GDScript, and the error it produces is *"Expected parameter name"* — which points at the punctuation rather than at the word.
-
-## `BINDING` had a kind and no way to declare one
-
-`DotSettingsDef.Kind.BINDING` has existed since this addon was written and there was no constructor for it, so nothing in the family had ever declared a binding as a setting: every game's keys lived in `DotBindingsPanel`'s own file, and a game that wanted *one* key in its settings document had to build the def by hand. `DotSettingsDef.binding(key, default, category)` is that constructor, bounded at 32 characters — long enough for `"Shift+Kp Subtract"` and nothing like long enough to be a payload.
-
-**The value stays opaque here, and that is the seam.** dot-settings does not depend on dot-ui and has no opinion about what a key is called; `DotInputBinding` is what reads and writes the text. What this addon guarantees is what it guarantees for any string — that the setting is declared, bounded, scoped and enumerable, which is the whole difference between a settings system and a dictionary of whatever somebody happened to store.
-
-Text rather than a keycode because a settings document is written to disk, may be synchronised to an account, and is hand-edited more often than any other file in a game. `"Y"` survives all three; `89` survives none of them, and is also a number that means a different key on a different layout.
-
-## Things deliberately not here
-
-- **An account store.** It is an HTTP client against somebody's backbone and whose backbone it is, is not this addon's decision. `remote_store` takes any subclass.
-- **A settings screen.** dot-ui generates one from the `DotConfig`. Shipping a second would be two screens to keep in step.
-- **Key binding storage beyond a string.** `Kind.BINDING` holds text and is opaque here. dot-ui has the rebinder and the conflict detection; this stores what it produces.
-- **Cloud conflict resolution.** Two machines that both changed the same account setting while offline is a real problem and a bigger one than this; last-write-wins is what the shipped store does and the addon says so rather than pretending.
-
-## The categories reached nothing until a screen was rendered
-
-`DotSettingsDef.category` has carried "Video", "Audio", "Gameplay" since the class was written, every schema in this family sets it, and `DotSettingsConfig._get_property_list` emitted **no `PROPERTY_USAGE_GROUP` entry at all**. That constant is what `@export_group` compiles to and the only thing a reflective reader has to group by — so a generated settings screen came out with a single heading called **"Resource"**, the base class name, over the volume, the chat lines and the shake scale together.
-
-It survived because everything about it looked right: the panel drew, every row was correct, and the heading was a plausible word. A screenshot of the menus is what showed it.
-
-**The group entries have to come after the base class's own.** `get_property_list()` includes `Resource`'s groups, and a reader tracks the most recent entry it has passed — so a group emitted before them would be overwritten by the class name again. The suite asserts the order rather than the absence, because the built-in one is legitimately there.
-
-## Validating
-
-```bash
-godot --headless --path . --import
-find . -name '*.gd' -not -path './.godot/*' | while read f; do
-    godot --headless --path . --check-only --script "res://${f#./}"
-done
-timeout 120 godot --headless --path . res://examples/settings_selftest.tscn
-```
-
-9 sections, 102 checks. **Read the stderr even when it exits 0** — this is the addon that proved why.
+Deliberately not here: an account store, a settings screen, binding logic, cloud conflict resolution. [design](docs/design.md#deliberately-not-here)
