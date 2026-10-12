@@ -32,12 +32,33 @@ extends Node
 ## shared_namespace] is where [constant DotSettingsDef.Scope.ACCOUNT] keys live, so two
 ## games that opt into the same name genuinely share one sensitivity and one crosshair,
 ## and a game that does not opt in is unaffected by either.
+##
+## [b]The newest write of an account setting wins, key by key.[/b] Both documents hold
+## every account key, each with the time it was last chosen (the [constant STAMPS_SECTION]
+## of the game's own document, [constant ACCOUNT_STAMPS_KEY] in the account one). Load
+## takes whichever is newer, and a save reads the account document again first, so a game
+## that has been running for an hour does not write back the sensitivity another game
+## changed ten minutes ago.
 
 const SERVICE := &"dot_settings"
 const CHANNEL := "settings"
 
 ## The document's record of the default each value was saved under.
 const DEFAULTS_SECTION := "defaults"
+
+## The game document's record of when each account setting was last chosen, in Unix ms.
+const STAMPS_SECTION := "stamps"
+
+## The same record inside the account document. Underscored and beside the values rather
+## than wrapping them, because a build from before stamps reads that document flat: it
+## looks every key up in its schema, finds no `_stamps` setting, and ignores it, where a
+## nested `values` would have hidden every account setting from it.
+const ACCOUNT_STAMPS_KEY := "_stamps"
+
+## The stamp an account value with none is read as: newer than a game copy with none
+## (which is what makes the account document win for files written before stamps, as the
+## design always said it should), older than any choice actually made since.
+const LEGACY_ACCOUNT_STAMP := 1
 
 ## One setting changed. Fired for a load, a reset and a server clamp as well as for a
 ## direct set, because every consumer wants to know either way.
@@ -98,9 +119,15 @@ var remote_store: DotSettingsStore = null
 ## Keyed by the version being migrated [i]from[/i], so the step from 2 to 3 is under 2.
 var migrations: Dictionary = {}
 
+## What "now" is, in Unix milliseconds, for an account setting's stamp. Empty means the
+## system clock; a suite sets it so "newer" is a fact rather than a race.
+var clock: Callable = Callable()
+
 var _values: Dictionary = {}
 var _unknown: Dictionary = {}
 var _clamps: Dictionary = {}
+# When each ACCOUNT key was last chosen, Unix ms. 0 (absent) is "never chosen here".
+var _stamps: Dictionary = {}
 var _dirty := false
 var _dirty_since_ms := 0
 
@@ -203,6 +230,8 @@ func set_value(key: StringName, value: Variant, reason: StringName = &"user") ->
 		return DotResult.success(stored)
 
 	_values[key] = stored
+	if def.scope == DotSettingsDef.Scope.ACCOUNT:
+		_stamps[key] = _next_stamp(key)
 	_dirty = true
 	_dirty_since_ms = Time.get_ticks_msec()
 	if def.requires_restart:
@@ -226,6 +255,10 @@ func reset_value(key: StringName) -> DotResult:
 ## behalf.
 func reset_all() -> void:
 	_values = schema.defaults()
+	# A reset is a choice like any other, and it has to beat the old value in the account
+	# document or the next load brings that value straight back.
+	for k in schema.keys_in_scope(DotSettingsDef.Scope.ACCOUNT):
+		_stamps[k] = _next_stamp(k)
 	_dirty = true
 	_dirty_since_ms = Time.get_ticks_msec()
 	for k in _values.keys():
@@ -274,17 +307,17 @@ func load_now() -> DotResult:
 			return res.wrap("reading settings")
 		raw = (res.value as Dictionary).duplicate(true)
 
-	# The account half, read second so it wins for the keys it owns. Reading it first
-	# would let a stale local copy of an account setting overwrite the shared one, which
-	# is the direction that loses the change a player just made on another machine.
-	if _account_store() != null and shared_namespace != &"":
-		var res := _account_store().load_document(shared_namespace, profile)
-		if res.ok:
-			var shared: Dictionary = res.value
-			for k in shared.keys():
-				var def := schema.find(StringName(str(k)))
-				if def != null and def.scope == DotSettingsDef.Scope.ACCOUNT:
-					raw[k] = shared[k]
+	# When each account setting was last chosen in this game. Not a setting and not an
+	# unknown key, for the same reason as the defaults below. A document without it was
+	# written before stamps: every value in it counts as never chosen (0), so the account
+	# document wins once and the next save writes the stamps.
+	_stamps = {}
+	var stamped_locally := raw.get(STAMPS_SECTION) is Dictionary
+	if stamped_locally:
+		var st: Dictionary = raw[STAMPS_SECTION]
+		for k in st.keys():
+			_stamps[StringName(str(k))] = _stamp_of(st[k])
+	raw.erase(STAMPS_SECTION)
 
 	# The defaults each value was saved under: not a setting, and not an unknown key either
 	# (an unknown key is written back untouched, and this one must be rewritten every save).
@@ -304,6 +337,26 @@ func load_now() -> DotResult:
 	_restart_pending.clear()
 
 	var followed := _follow_defaults(saved_under)
+
+	# The account half, merged after the game's own so the newer choice of each account
+	# setting wins. It used to be written into the top level of `raw`, where the migration
+	# step only copies keys `values` does not already hold, so once a game had saved once its
+	# own copy of the sensitivity beat the account's for ever, and a change made in another
+	# game never arrived.
+	var adopted := PackedStringArray()
+	if _shares_account():
+		var shared: Variant = _read_account()
+		if shared is Dictionary:
+			adopted = _merge_account(shared, false)
+		if not stamped_locally and not schema.keys_in_scope(DotSettingsDef.Scope.ACCOUNT).is_empty():
+			# A document from before stamps: save soon so both halves carry them.
+			_dirty = true
+			_dirty_since_ms = Time.get_ticks_msec()
+	if not adopted.is_empty():
+		_dirty = true
+		_dirty_since_ms = Time.get_ticks_msec()
+		DotLog.debug(CHANNEL, "account settings newer than this game's copy", {"what": ", ".join(adopted)})
+
 	if not followed.is_empty():
 		# Saved soon, so the document records the default it is under now and this runs once.
 		_dirty = true
@@ -353,22 +406,106 @@ func flush() -> DotResult:
 		saved.emit(refused)
 		return refused
 
+	# Read the account document again before writing it. Another game may have changed an
+	# account setting since this one loaded, and writing this process's copy over it would
+	# undo that change: per key, whichever choice is newer stays, here and on disk.
+	var account_keys := schema.keys_in_scope(DotSettingsDef.Scope.ACCOUNT)
+	if _shares_account() and not account_keys.is_empty():
+		var current: Variant = _read_account()
+		if current is Dictionary:
+			_merge_account(current, true)
+
 	var doc := to_document()
 	var res := local_store.save_document(app_namespace, profile, doc)
-	if res.ok and _account_store() != null and shared_namespace != &"":
+	if res.ok and _shares_account() and not account_keys.is_empty():
 		var shared := {}
-		for k in schema.keys_in_scope(DotSettingsDef.Scope.ACCOUNT):
+		var stamps := {}
+		for k in account_keys:
 			shared[String(k)] = _values.get(k)
-		if not shared.is_empty():
-			var sres := _account_store().save_document(shared_namespace, profile, shared)
-			if not sres.ok:
-				DotLog.warn(CHANNEL, "account settings not saved", {"why": sres.error.message})
+			stamps[String(k)] = int(_stamps.get(k, 0))
+		shared[ACCOUNT_STAMPS_KEY] = stamps
+		var sres := _account_store().save_document(shared_namespace, profile, shared)
+		if not sres.ok:
+			DotLog.warn(CHANNEL, "account settings not saved", {"why": sres.error.message})
 	saved.emit(res)
 	return res
 
 
 func _account_store() -> DotSettingsStore:
 	return remote_store if remote_store != null else local_store
+
+
+func _shares_account() -> bool:
+	return _account_store() != null and shared_namespace != &""
+
+
+# The account document as {"values": {key: value}, "stamps": {key: ms}}, or null when it
+# cannot be read. A flat document from before stamps has values and no stamps.
+func _read_account() -> Variant:
+	var res := _account_store().load_document(shared_namespace, profile)
+	if not res.ok:
+		DotLog.warn(CHANNEL, "account settings not read", {"why": res.error.message})
+		return null
+	var doc: Dictionary = res.value
+	var values := {}
+	var stamps := {}
+	if doc.get(ACCOUNT_STAMPS_KEY) is Dictionary:
+		var st: Dictionary = doc[ACCOUNT_STAMPS_KEY]
+		for k in st.keys():
+			stamps[StringName(str(k))] = _stamp_of(st[k])
+	for k in doc.keys():
+		if str(k) != ACCOUNT_STAMPS_KEY:
+			values[StringName(str(k))] = doc[k]
+	return {"values": values, "stamps": stamps}
+
+
+# Takes each account value that is at least as new as this game's copy. Returns the keys
+# whose value changed. `announce` emits `changed` for each, which a load does not need
+# (it emits `reloaded`) and a save in a running game does.
+func _merge_account(shared: Dictionary, announce: bool) -> PackedStringArray:
+	var out := PackedStringArray()
+	var values: Dictionary = shared["values"]
+	var stamps: Dictionary = shared["stamps"]
+	for key in values.keys():
+		var def := schema.find(key)
+		if def == null or def.scope != DotSettingsDef.Scope.ACCOUNT:
+			continue
+		var theirs := int(stamps.get(key, LEGACY_ACCOUNT_STAMP))
+		var ours := int(_stamps.get(key, 0))
+		# Equal is the account's: two copies stamped alike are one choice, and the account
+		# document is the one every game reads.
+		if theirs < ours:
+			continue
+		var c := def.coerce(values[key])
+		if not c.ok:
+			continue
+		_stamps[key] = theirs
+		if DotValue.same(_values.get(key), c.value):
+			continue
+		_values[key] = c.value
+		out.append(String(key))
+		if announce:
+			changed.emit(key, get_value(key), &"account")
+	return out
+
+
+func _now_ms() -> int:
+	if clock.is_valid():
+		return int(clock.call())
+	return int(Time.get_unix_time_from_system() * 1000.0)
+
+
+# Now, or one past the key's last stamp when the clock says otherwise: a choice is always
+# newer than the one it replaces, even on a machine whose clock just stepped back.
+func _next_stamp(key: StringName) -> int:
+	return maxi(_now_ms(), int(_stamps.get(key, 0)) + 1)
+
+
+func _stamp_of(v: Variant) -> int:
+	# JSON brings every number back as a float; a Unix millisecond time is exact in one.
+	if v is int or v is float:
+		return int(v)
+	return 0
 
 
 ## The document as it is stored: version, values, and the keys this build does not know.
@@ -388,6 +525,11 @@ func to_document() -> Dictionary:
 		if def != null:
 			under[String(k)] = def.default_value
 	doc[DEFAULTS_SECTION] = under
+	if not _stamps.is_empty():
+		var st := {}
+		for k in _stamps.keys():
+			st[String(k)] = int(_stamps[k])
+		doc[STAMPS_SECTION] = st
 	for k in _unknown.keys():
 		if not doc.has(k):
 			doc[k] = _unknown[k]

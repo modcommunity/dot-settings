@@ -16,8 +16,8 @@ extends Node
 ## in one section took eight checks out of a run that reported "0 failed" and exited 0.
 ## The section counter did not fire, because the section had already announced itself.
 ## A total does fire, and it is one line.
-const SECTIONS := 10
-const CHECKS := 111
+const SECTIONS := 11
+const CHECKS := 127
 
 var _passed := 0
 var _failed := 0
@@ -38,6 +38,7 @@ func _run() -> void:
 	_test_documents()
 	_test_manager()
 	_test_persistence()
+	_test_account_precedence()
 	_test_migration()
 	_test_moved_defaults()
 	_test_clamps()
@@ -335,6 +336,178 @@ func _test_persistence() -> void:
 	m.queue_free()
 	other.queue_free()
 	read_only.queue_free()
+
+
+# --- 5b ---------------------------------------------------------------------
+
+func _account_game(
+	game: StringName, local: DotSettingsStore, account: DotSettingsStore, t: Array
+) -> DotSettingsManager:
+	var m := DotSettingsManager.new()
+	m.schema = _schema()
+	m.local_store = local
+	m.remote_store = account
+	m.app_namespace = game
+	m.shared_namespace = &"tmc_account"
+	m.profile = &"player_a"
+	m.register_as_service = false
+	# An Array, because a lambda captures a local by value and the suite moves the clock.
+	m.clock = func() -> int: return int(t[0])
+	add_child(m)
+	m.setup()
+	return m
+
+
+## The bug this section exists for: the second game in the persistence section had an empty
+## document of its own, so it could not tell "the account wins" from "the only copy wins".
+## Here both games have saved, so both documents hold the sensitivity.
+func _test_account_precedence() -> void:
+	_section("Both documents hold an account setting, and the newer choice wins")
+
+	var t := [1_000_000]
+	var account := DotSettingsStoreMemory.new()
+	var one_store := DotSettingsStoreMemory.new()
+	var two_store := DotSettingsStoreMemory.new()
+	var one := _account_game(&"game_one", one_store, account, t)
+	var two := _account_game(&"game_two", two_store, account, t)
+
+	one.set_value(&"sensitivity", 4.0)
+	one.set_value(&"master_volume", 0.3)
+	one.flush()
+	t[0] += 1000
+	two.load_now()
+	two.set_value(&"master_volume", 0.6)
+	two.flush()
+	_check(
+		is_equal_approx(two.get_float(&"sensitivity"), 4.0),
+		"a game that has never chosen a sensitivity takes the account's"
+	)
+	var two_doc: Dictionary = two_store.load_document(&"game_two", &"player_a").value
+	_check(
+		(two_doc.get("values", {}) as Dictionary).has("sensitivity"),
+		"and now holds its own copy, which is the case the old load lost"
+	)
+
+	t[0] += 1000
+	one.set_value(&"sensitivity", 8.0)
+	one.flush()
+	two.load_now()
+	_check(
+		is_equal_approx(two.get_float(&"sensitivity"), 8.0),
+		"a change made in one game reaches another that has saved its own copy"
+	)
+	_check(
+		is_equal_approx(two.get_float(&"master_volume"), 0.6),
+		"and a game-scoped value stays that game's own"
+	)
+
+	# A game that has been running all along writes on change. Its in-memory sensitivity is
+	# older than the one another game just saved, and must not be written back over it.
+	t[0] += 1000
+	two.set_value(&"sensitivity", 9.0)
+	two.flush()
+	t[0] += 1000
+	var heard := []
+	one.changed.connect(func(k: StringName, v: Variant, why: StringName) -> void:
+		if k == &"sensitivity":
+			heard.append([v, why]))
+	one.set_value(&"master_volume", 0.35)
+	one.flush()
+	var acc: Dictionary = account.load_document(&"tmc_account", &"player_a").value
+	_check(
+		is_equal_approx(float(acc.get("sensitivity", 0.0)), 9.0),
+		"a save from a game with an older copy does not undo the newer one on disk"
+	)
+	_check(
+		is_equal_approx(one.get_float(&"sensitivity"), 9.0)
+		and heard.size() == 1 and heard[0][1] == &"account",
+		"and that game takes the newer value and announces it"
+	)
+	_check(
+		is_equal_approx(one.get_float(&"master_volume"), 0.35),
+		"while its own change in the same save stays"
+	)
+	_check(
+		acc.get(DotSettingsManager.ACCOUNT_STAMPS_KEY) is Dictionary,
+		"the account document records when each value was chosen"
+	)
+	_check(one.describe()["unknown"] == 0, "and neither record is kept as an unknown setting")
+
+	# Files written before stamps: the account document wins once, as the design always
+	# said, and the next save stamps both halves.
+	var old_local := DotSettingsStoreMemory.new()
+	var old_account := DotSettingsStoreMemory.new()
+	old_local.save_document(&"game_old", &"player_a", {
+		"version": 1, "values": {"sensitivity": 3.0, "master_volume": 0.5, "subtitles": true},
+	})
+	old_account.save_document(&"tmc_account", &"player_a", {
+		"sensitivity": 7.0, "subtitles": false,
+	})
+	var old := _account_game(&"game_old", old_local, old_account, t)
+	_check(
+		is_equal_approx(old.get_float(&"sensitivity"), 7.0) and not old.get_bool(&"subtitles"),
+		"an unstamped game copy loses to the account document (migration)"
+	)
+	_check(
+		is_equal_approx(old.get_float(&"master_volume"), 0.5),
+		"while the game's own values load as they were"
+	)
+	_check(old.has_unsaved_changes(), "and the migration is saved soon, so it runs once")
+	old.flush()
+	var stamped: Dictionary = old_local.load_document(&"game_old", &"player_a").value
+	var acc2: Dictionary = old_account.load_document(&"tmc_account", &"player_a").value
+	_check(
+		stamped.get(DotSettingsManager.STAMPS_SECTION) is Dictionary
+		and acc2.get(DotSettingsManager.ACCOUNT_STAMPS_KEY) is Dictionary,
+		"after which both documents carry stamps"
+	)
+
+	# A build from before stamps rewrites the account document flat. A choice made since in
+	# a stamped game is newer than anything unstamped, and is kept.
+	t[0] += 1000
+	old.set_value(&"sensitivity", 5.0)
+	old.flush()
+	old_account.save_document(&"tmc_account", &"player_a", {"sensitivity": 2.0, "subtitles": false})
+	old.load_now()
+	_check(
+		is_equal_approx(old.get_float(&"sensitivity"), 5.0),
+		"a stamped choice beats an unstamped account value written by an older build"
+	)
+
+	# A reset is a choice too: it must beat the value it reset in the account document.
+	t[0] += 1000
+	one.reset_all()
+	one.flush()
+	two.load_now()
+	_check(
+		is_equal_approx(two.get_float(&"sensitivity"), 2.5),
+		"a reset in one game reaches the other instead of being brought back"
+	)
+
+	# A file store, because JSON hands every stamp back as a float.
+	var dir := "user://selftest_account_%d" % Time.get_ticks_usec()
+	var f_local := DotSettingsStoreFile.new(dir)
+	var f_account := DotSettingsStoreFile.new(dir)
+	var fa := _account_game(&"file_one", f_local, f_account, t)
+	var fb_local := DotSettingsStoreFile.new(dir)
+	var fb := _account_game(&"file_two", fb_local, f_account, t)
+	t[0] += 1000
+	fb.set_value(&"sensitivity", 6.0)
+	fb.flush()
+	t[0] += 1000
+	fa.set_value(&"sensitivity", 11.0)
+	fa.flush()
+	fb.load_now()
+	_check(
+		is_equal_approx(fb.get_float(&"sensitivity"), 11.0),
+		"on disk too, through JSON's floats"
+	)
+	for n in [&"file_one", &"file_two", &"tmc_account"]:
+		f_local.clear_document(n, &"player_a")
+	DirAccess.remove_absolute(dir)
+
+	for m in [one, two, old, fa, fb]:
+		m.queue_free()
 
 
 # --- 6 ----------------------------------------------------------------------

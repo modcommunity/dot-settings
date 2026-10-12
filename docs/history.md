@@ -22,3 +22,7 @@ Godot refuses a dynamic property on an `Object`: `cfg.some_new_key = 1` pushes a
 ## Every setting under one heading called "Resource"
 
 `DotSettingsDef.category` carried "Video", "Audio", "Gameplay" from the start, every schema set it, and `DotSettingsConfig._get_property_list` emitted no `PROPERTY_USAGE_GROUP` entry at all. A generated settings screen came out with a single heading called **"Resource"** (the base class name) over everything. It survived because everything about it looked right: the panel drew, every row was correct, and the heading was a plausible word. A screenshot of the menus is what showed it.
+
+## The account document that never won
+
+The design said the account half is read after the game's own so it wins, and the code did read it second, into the top level of the raw document. The migration step then built the values from `values` and copied a top-level key only when `values` did not already hold it, and `to_document` wrote every value, account keys included, into the game's own document. So once a game had saved once, its own copy of the sensitivity beat the account's on every load, and a change made in another game never arrived. The suite missed it because its second game had an empty document of its own, which cannot tell "the account wins" from "the only copy wins". The fix stamps each account value with when it was chosen and merges per key on load and before every save; the suite's precedence section has both games save before either reads the other's change.
