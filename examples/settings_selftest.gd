@@ -16,8 +16,8 @@ extends Node
 ## in one section took eight checks out of a run that reported "0 failed" and exited 0.
 ## The section counter did not fire, because the section had already announced itself.
 ## A total does fire, and it is one line.
-const SECTIONS := 9
-const CHECKS := 102
+const SECTIONS := 10
+const CHECKS := 111
 
 var _passed := 0
 var _failed := 0
@@ -39,6 +39,7 @@ func _run() -> void:
 	_test_manager()
 	_test_persistence()
 	_test_migration()
+	_test_moved_defaults()
 	_test_clamps()
 	_test_config_bridge()
 	_test_from_an_existing_config()
@@ -389,6 +390,67 @@ func _test_migration() -> void:
 	)
 
 	m.queue_free()
+	m2.queue_free()
+
+
+# --- 6b ---------------------------------------------------------------------
+
+func _keys_schema(heal_default: String) -> DotSettingsSchema:
+	var s := DotSettingsSchema.new()
+	s.add(DotSettingsDef.binding(&"bind_help", "H"))
+	s.add(DotSettingsDef.binding(&"bind_heal", heal_default).with_previous_defaults(["H"]))
+	s.add(DotSettingsDef.binding(&"bind_use", "E"))
+	s.add(DotSettingsDef.number(&"master_volume", 0.8, 0.0, 1.0, &"audio"))
+	return s
+
+
+func _keys_manager(store: DotSettingsStore, s: DotSettingsSchema) -> DotSettingsManager:
+	var m := DotSettingsManager.new()
+	m.schema = s
+	m.local_store = store
+	m.app_namespace = &"keys"
+	m.profile = &"p"
+	m.register_as_service = false
+	add_child(m)
+	m.setup()
+	return m
+
+
+func _test_moved_defaults() -> void:
+	_section("A value nobody chose follows its default when the default moves")
+
+	# A document from before documents recorded their defaults: the medkit on H, which was
+	# its default then; the use key on Q, which was a choice.
+	var store := DotSettingsStoreMemory.new()
+	store.save_document(&"keys", &"p", {"version": 1, "values": {
+		"bind_help": "H", "bind_heal": "H", "bind_use": "Q", "master_volume": 0.8,
+	}})
+	var m := _keys_manager(store, _keys_schema("G"))
+	_check(m.get_string(&"bind_heal") == "G", "a stored value equal to a previous default moves to the new one")
+	_check(m.get_string(&"bind_help") == "H", "the row whose default it is keeps the key")
+	_check(m.get_string(&"bind_use") == "Q", "a value somebody chose is kept")
+	_check(m.has_unsaved_changes(), "and the move is saved, so it happens once")
+	m.flush()
+	var doc: Dictionary = store.load_document(&"keys", &"p").value
+	_check(
+		doc.get("defaults") is Dictionary and str(doc["defaults"].get("bind_heal")) == "G",
+		"the document now records the default each value was saved under"
+	)
+	_check(
+		not (doc["values"] as Dictionary).has("defaults") and not m.describe()["unknown"],
+		"and that record is neither a setting nor an unknown key"
+	)
+	m.queue_free()
+
+	# A later build moves the medkit again, with no previous_defaults declared: the record
+	# alone carries it. The volume default moves too; the player's own use key does not.
+	var s2 := _keys_schema("J")
+	s2.find(&"master_volume").default_value = 0.6
+	s2.find(&"bind_use").default_value = "F"
+	var m2 := _keys_manager(store, s2)
+	_check(m2.get_string(&"bind_heal") == "J", "a value on the default it was saved under follows the next move too")
+	_check(is_equal_approx(m2.get_float(&"master_volume"), 0.6), "for any kind of setting, not only keys")
+	_check(m2.get_string(&"bind_use") == "Q", "and a choice survives a moved default")
 	m2.queue_free()
 
 

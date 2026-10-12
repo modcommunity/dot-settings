@@ -91,6 +91,17 @@ enum Scope {
 ## "this is nobody else's business". A device name, a microphone id, a save directory.
 @export var private: bool = false
 
+## Defaults this setting shipped with before [member default_value], oldest first.
+##
+## [b]For documents saved before they recorded their defaults.[/b] A document now stores the
+## default each value was saved under ([DotSettingsManager]'s `defaults` section), so a value
+## still equal to it follows a new default by itself. An older document has no such record:
+## a stored value equal to one of these is read as "never chosen" and moves to the current
+## default once, and the next save records the default it is under. Without it, a player who
+## never touched a key keeps the old one for ever, and the key the default moved away from
+## does two things.
+@export var previous_defaults: Array = []
+
 
 ## Coerces [param value] to this setting's type and bounds.
 ##
@@ -316,6 +327,14 @@ func with_description(p_text: String) -> DotSettingsDef:
 
 func as_private() -> DotSettingsDef:
 	private = true
+	return self
+
+
+## Declares what this setting's default used to be ([member previous_defaults]).
+func with_previous_defaults(values: Array) -> DotSettingsDef:
+	for v in values:
+		if not previous_defaults.has(v):
+			previous_defaults.append(v)
 	return self
 
 

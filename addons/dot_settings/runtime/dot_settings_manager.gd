@@ -36,6 +36,9 @@ extends Node
 const SERVICE := &"dot_settings"
 const CHANNEL := "settings"
 
+## The document's record of the default each value was saved under.
+const DEFAULTS_SECTION := "defaults"
+
 ## One setting changed. Fired for a load, a reset and a server clamp as well as for a
 ## direct set, because every consumer wants to know either way.
 signal changed(key: StringName, value: Variant, reason: StringName)
@@ -283,6 +286,13 @@ func load_now() -> DotResult:
 				if def != null and def.scope == DotSettingsDef.Scope.ACCOUNT:
 					raw[k] = shared[k]
 
+	# The defaults each value was saved under: not a setting, and not an unknown key either
+	# (an unknown key is written back untouched, and this one must be rewritten every save).
+	var saved_under: Dictionary = {}
+	if raw.get(DEFAULTS_SECTION) is Dictionary:
+		saved_under = raw[DEFAULTS_SECTION]
+	raw.erase(DEFAULTS_SECTION)
+
 	var doc := _migrate(raw)
 	var coerced := schema.coerce_document(doc)
 	_values = coerced["values"]
@@ -292,6 +302,17 @@ func load_now() -> DotResult:
 	# A load is what a restart looks like from here: the values in memory now ARE the ones
 	# on disk, so nothing is waiting any more.
 	_restart_pending.clear()
+
+	var followed := _follow_defaults(saved_under)
+	if not followed.is_empty():
+		# Saved soon, so the document records the default it is under now and this runs once.
+		_dirty = true
+		_dirty_since_ms = Time.get_ticks_msec()
+		DotLog.info(
+			CHANNEL,
+			"%d stored settings were on an old default and follow the new one" % followed.size(),
+			{"what": ", ".join(followed)}
+		)
 
 	var corrected: PackedStringArray = coerced["corrected"]
 	if not corrected.is_empty():
@@ -359,10 +380,53 @@ func to_document() -> Dictionary:
 		# who has left.
 		values[String(k)] = _values[k]
 	var doc := {"version": schema.version, "values": values}
+	# Beside every value, the default it was saved under. A value equal to it was never
+	# chosen, so it follows the default when a later build moves it (see `_follow_defaults`).
+	var under := {}
+	for k in _values.keys():
+		var def := schema.find(k)
+		if def != null:
+			under[String(k)] = def.default_value
+	doc[DEFAULTS_SECTION] = under
 	for k in _unknown.keys():
 		if not doc.has(k):
 			doc[k] = _unknown[k]
 	return doc
+
+
+## Moves every value still on the default it was saved under to the current default.
+## Returns `"key: old -> new"` for each one moved.
+##
+## [b]A value equal to its default is a value nobody chose.[/b] Storing it as a plain value
+## made it indistinguishable from a choice, so when a build moved a default (a key that had
+## to make room for one the whole family shares), a returning player kept the old one and
+## two actions shared a key. The document now records the default each value was saved
+## under; one that still matches it follows. A document from before that record uses
+## [member DotSettingsDef.previous_defaults] instead, once.
+##
+## The rest is a choice and is kept, even where it equals an old default somewhere else.
+func _follow_defaults(saved_under: Dictionary) -> PackedStringArray:
+	var moved := PackedStringArray()
+	for def in schema.defs:
+		if def == null or not _values.has(def.key):
+			continue
+		var value: Variant = _values[def.key]
+		if DotValue.same(value, def.default_value):
+			continue
+		var was_default := false
+		if saved_under.has(String(def.key)):
+			var c := def.coerce(saved_under[String(def.key)])
+			was_default = c.ok and DotValue.same(value, c.value)
+		else:
+			for old in def.previous_defaults:
+				var c := def.coerce(old)
+				if c.ok and DotValue.same(value, c.value):
+					was_default = true
+					break
+		if was_default:
+			_values[def.key] = def.default_value
+			moved.append("%s: %s -> %s" % [def.key, str(value), str(def.default_value)])
+	return moved
 
 
 func _migrate(raw: Dictionary) -> Dictionary:

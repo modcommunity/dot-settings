@@ -45,6 +45,7 @@ The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything
 - Coercion corrects; only an unknown enum option is refused. `_clamp_number` returns `Variant`. [design](docs/design.md#coercion)
 - Compare Variants whose types you do not control with dot-core's `DotValue`, never `!=`. [design](docs/design.md#coercion)
 - A missing document is a success; a corrupt one is renamed `.broken`. Use `app_namespace`, never `namespace`. [design](docs/design.md#storage)
+- A document records the default each value was saved under; a value still on it follows a moved default, and an older document uses `previous_defaults`, once. Never strip the `defaults` section or treat it as an unknown key. [design](docs/design.md#a-value-nobody-chose-follows-its-default)
 - A binding is opaque text, at most 32 characters, declared with `DotSettingsDef.binding()`. [design](docs/design.md#bindings-are-opaque-text)
 
 Deliberately not here: an account store, a settings screen, binding logic, cloud conflict resolution. [design](docs/design.md#deliberately-not-here)

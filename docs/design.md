@@ -56,6 +56,18 @@ The downgrade path. A player who runs a newer build, changes a setting it added 
 - **`DotSettingsStoreFile` writes atomic JSON under `user://`, flushed for the web**; `DotSettingsStoreMemory` is a suite's store and the honest fallback for a refused storage quota.
 - **`app_namespace`, not `namespace`.** `namespace` is a reserved word in GDScript, and the error it produces is *"Expected parameter name"*, which points at the punctuation rather than at the word.
 
+## A value nobody chose follows its default
+
+A document stores every value, so a value equal to its default looked exactly like a choice. When a build moved a default (a key that had to make room for one the whole family shares), a returning player kept the old one, and two actions shared a key or the new one never worked.
+
+**The document records the default each value was saved under** (its `defaults` section, beside `values`). On load, a value still equal to the default it was saved under, where that default has since changed, moves to the current one and is saved, so it happens once. A value that differs from its recorded default was chosen and is kept, even where it equals some other row's old default. This holds for every kind, not only keys: a retuned slider default reaches everybody who never moved the slider.
+
+**A document from before that record** carries no defaults, so a setting declares what its default used to be (`DotSettingsDef.previous_defaults`, `with_previous_defaults([...])`) and a stored value equal to one of them moves, once. A player who genuinely chose the old default loses that one choice; the alternative, keeping every old default, is the bug.
+
+Saving only the values that differ from their defaults would do the same, and is not done: it changes what every existing document reader sees, and a document that omits a value cannot tell "never chosen" from "written by a build that did not declare it".
+
+The `defaults` section is neither a setting nor an unknown key: unknown keys are written back untouched, and this record must be rewritten on every save.
+
 ## Bindings are opaque text
 
 `DotSettingsDef.binding(key, default, category)` declares a key binding as a setting, bounded at 32 characters: long enough for `"Shift+Kp Subtract"` and nothing like long enough to be a payload. dot-menu's key table declares its rows this way.
