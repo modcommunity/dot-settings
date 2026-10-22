@@ -1,0 +1,17 @@
+# comments
+# Baselines only shrink: scripts/<gate> --update lowers or drops entries and refuses to add.
+addons/dot_settings/core/dot_settings_config.gd::banner	1
+addons/dot_settings/core/dot_settings_config.gd::long_block	3
+addons/dot_settings/core/dot_settings_def.gd::history	1
+addons/dot_settings/core/dot_settings_def.gd::long_block	10
+addons/dot_settings/core/dot_settings_policy.gd::long_block	4
+addons/dot_settings/core/dot_settings_schema.gd::long_block	8
+addons/dot_settings/dot_settings_plugin.gd::long_block	1
+addons/dot_settings/runtime/dot_settings_manager.gd::banner	5
+addons/dot_settings/runtime/dot_settings_manager.gd::history	1
+addons/dot_settings/runtime/dot_settings_manager.gd::long_block	16
+addons/dot_settings/store/dot_settings_store.gd::long_block	3
+addons/dot_settings/store/dot_settings_store_file.gd::long_block	3
+addons/dot_settings/store/dot_settings_store_memory.gd::long_block	1
+examples/settings_selftest.gd::banner	12
+examples/settings_selftest.gd::long_block	7

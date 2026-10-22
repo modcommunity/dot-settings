@@ -1,0 +1,6 @@
+# frame-hazards
+# Baselines only shrink: scripts/<gate> --update lowers or drops entries and refuses to add.
+addons/dot_settings/runtime/dot_settings_manager.gd::_read_account::alloc_dict	2
+addons/dot_settings/runtime/dot_settings_manager.gd::_read_account::string_build	3
+addons/dot_settings/runtime/dot_settings_manager.gd::flush::alloc_dict	2
+addons/dot_settings/runtime/dot_settings_manager.gd::to_document::alloc_dict	4
