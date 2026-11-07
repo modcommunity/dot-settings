@@ -31,7 +31,7 @@ Paths except `examples/` are in `addons/dot_settings/`.
 
 ## Running and testing
 
-The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything)), then `timeout 120 godot --headless --path . res://examples/settings_selftest.tscn`. **Read the stderr even when it exits 0**: this is the addon that proved why ([history](docs/history.md#a-comparison-that-aborted-a-green-suite)).
+The family's two steps ([family CLAUDE.md](../../CLAUDE.md#validating-anything)), then `timeout 120 godot --headless --path . res://examples/settings_selftest.tscn`. **Read the stderr even when it exits 0**: this is the addon that proved why ([history](docs/history.md#a-comparison-that-aborted-a-green-suite)).
 
 ## Rules that bite
 
