@@ -17,7 +17,7 @@ extends Node
 ## The section counter did not fire, because the section had already announced itself.
 ## A total does fire, and it is one line.
 const SECTIONS := 11
-const CHECKS := 127
+const CHECKS := 128
 
 var _passed := 0
 var _failed := 0
@@ -200,6 +200,8 @@ func _test_documents() -> void:
 		not corrected[0].begins_with("fov"),
 		"a value that changed only its Variant type is not reported as a correction"
 	)
+	var reread: Dictionary = s.coerce_document({"fov": 110.0})
+	_check((reread["corrected"] as PackedStringArray).is_empty(), "nor is a whole number JSON read back as a float")
 
 	# The downgrade path. A player who runs a newer build, changes a setting it added and
 	# goes back would otherwise lose it silently -- and lose it again every time.

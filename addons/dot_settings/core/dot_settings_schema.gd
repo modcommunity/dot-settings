@@ -147,17 +147,10 @@ func coerce_document(raw: Dictionary) -> Dictionary:
 		if not res.ok:
 			refused.append("%s: %s" % [key, res.error.message])
 			continue
-		# Two hazards in one line, and the first one cost a whole section of this addon's
-		# own suite before anybody noticed.
-		#
-		# 1. `res.value != raw[k]` is a runtime ERROR when the two have different Variant
-		#    types -- an int a coercion produced against the String it came from -- rather
-		#    than the `true` everybody expects. The expression is abandoned and the caller
-		#    carries on. See DotValue, which exists because of this.
-		# 2. A value that changed only its type is not a correction worth telling a player
-		#    about: "fov: 110 -> 110" is noise, and noise is what stops the real lines
-		#    being read. Comparing what they print is exactly the question being asked.
-		if str(res.value) != str(raw[k]):
+		# Compared by print, not `!=` (a runtime error across Variant types), and numbers by value:
+		# JSON reads every number back as a float, and "aa: 0.0 -> 0" is not a correction.
+		var both_numbers := (res.value is int or res.value is float) and (raw[k] is int or raw[k] is float)
+		if (float(res.value) != float(raw[k])) if both_numbers else (str(res.value) != str(raw[k])):
 			corrected.append("%s: %s -> %s" % [key, str(raw[k]), str(res.value)])
 		values[key] = res.value
 
