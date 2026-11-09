@@ -24,6 +24,7 @@ Read the family [CLAUDE.md](../../CLAUDE.md) first; this file is only what is sp
 | `store/dot_settings_store.gd` | `DotSettingsStore`: three methods; a missing document is a success |
 | `store/dot_settings_store_file.gd` | `DotSettingsStoreFile`: atomic JSON under `user://`, flushed for the web |
 | `store/dot_settings_store_memory.gd` | `DotSettingsStoreMemory`: a suite's, and the fallback for a refused quota |
+| `store/dot_settings_scratch.gd` | `DotSettingsScratch`: a per-process scratch directory for a suite or a render (`use(tag)`, swept when its process is gone) |
 | `runtime/dot_settings_manager.gd` | `DotSettingsManager`: the node a game holds |
 | `examples/settings_selftest.tscn` | the suite |
 

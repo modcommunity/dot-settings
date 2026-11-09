@@ -16,8 +16,8 @@ extends Node
 ## in one section took eight checks out of a run that reported "0 failed" and exited 0.
 ## The section counter did not fire, because the section had already announced itself.
 ## A total does fire, and it is one line.
-const SECTIONS := 11
-const CHECKS := 128
+const SECTIONS := 12
+const CHECKS := 134
 
 var _passed := 0
 var _failed := 0
@@ -44,6 +44,7 @@ func _run() -> void:
 	_test_clamps()
 	_test_config_bridge()
 	_test_from_an_existing_config()
+	_test_scratch()
 
 	_line("")
 	_line("%d sections, %d passed, %d failed" % [_section_count, _passed, _failed])
@@ -784,6 +785,25 @@ func _test_config_bridge() -> void:
 
 
 # --- 9 ----------------------------------------------------------------------
+
+func _test_scratch() -> void:
+	_section("A scratch settings directory of this process")
+
+	var dir := DotSettingsScratch.use("selftest_scratch")
+	_check(DotSettingsScratch.is_scratch(dir), "it lives under the scratch root")
+	_check(dir.ends_with("_%d" % OS.get_process_id()), "and is this process's alone")
+	var store := DotSettingsStoreFile.new(dir)
+	_check(store.save_document(&"app", &"local", {"version": 1, "values": {"a": 1}}).ok, "a store writes into it")
+	_check(DotSettingsScratch.use("selftest_scratch") == dir, "using it again names the same directory")
+	_check(DotSettingsStoreFile.new(dir).load_document(&"app", &"local").value.is_empty(), "and empties it")
+
+	# A dead process's directory is swept; a live one's is not.
+	var dead := ProjectSettings.globalize_path(DotSettingsScratch.ROOT).path_join("selftest_scratch_2147483646")
+	var _made := DirAccess.make_dir_recursive_absolute(dead)
+	DotSettingsScratch.sweep_dead()
+	_check(not DirAccess.dir_exists_absolute(dead), "the directory of a process that has exited is swept")
+	var _gone := DirAccess.remove_absolute(ProjectSettings.globalize_path(dir))
+
 
 func _test_from_an_existing_config() -> void:
 	_section("A schema read out of a config that already existed")
